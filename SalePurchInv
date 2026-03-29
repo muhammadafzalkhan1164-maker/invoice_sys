@@ -1,0 +1,228 @@
+from flask import Flask, request, jsonify
+import mysql.connector
+
+app = Flask(__name__)
+
+# -----------------------------
+# DATABASE CONNECTION
+# -----------------------------
+def get_db():
+
+    return mysql.connector.connect(
+        host="localhost",
+        user="api_user",
+        password="FbrInv123",
+        database="invoice_management"
+    )
+
+#------------------------------
+# VALIDATE INVOICE DATA
+#------------------------------
+def validate_invoice_json(data):
+
+    required_fields = [
+        "invoice_type",
+        "invoice_number",
+        "invoice_date",
+        "buyer_seller_ntn_cnic",
+        "buyer_seller_name",
+        "destination_address",
+        "sale_type",
+        "items"
+    ]
+
+    for field in required_fields:
+        if field not in data:
+            return f"Missing field: {field}"
+
+    if not isinstance(data["items"], list):
+        return "Items must be an array"
+
+    return None
+
+# -----------------------------
+# API 1 : CREATE INVOICE
+# -----------------------------
+@app.route('/create_invoice', methods=['POST'])
+def create_invoice():
+
+    data = request.json
+
+    if not data:
+        return jsonify({"error": "No JSON data received"}), 400
+
+    validation_error = validate_invoice_json(data)
+
+    if validation_error:
+        return jsonify({"error": validation_error}), 400
+
+    item_required = [
+        "invoice_item_id",
+        "product_code",
+        "quantity",
+        "rate"
+    ]
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    try:
+
+        # -----------------------------
+        # INSERT INVOICE HEADER
+        # -----------------------------
+        invoice_sql = """
+        INSERT INTO invoices
+        (invoice_type,invoice_number,invoice_date,buyer_seller_ntn_cnic,
+        buyer_seller_name,destination_address,sale_type,
+        total_sales_tax_applicable,total_retail_price_fixed_value,
+        total_st_withheld_at_source,total_extra_tax,total_fed_payable,
+        total_withholding_income_tax_applicable,total_cvt,total_discount,
+        distributor_ntn_cnic,distributor_name)
+
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+
+        cursor.execute(
+            invoice_sql,
+            (
+                data["invoice_type"],
+                data["invoice_number"],
+                data["invoice_date"],
+                data["buyer_seller_ntn_cnic"],
+                data["buyer_seller_name"],
+                data["destination_address"],
+                data["sale_type"],
+                data["total_sales_tax_applicable"],
+                data["total_retail_price_fixed_value"],
+                data["total_st_withheld_at_source"],
+                data["total_extra_tax"],
+                data["total_fed_payable"],
+                data["total_withholding_income_tax_applicable"],
+                data["total_cvt"],
+                data["total_discount"],
+                data["distributor_ntn_cnic"],
+                data["distributor_name"]
+            )
+        )
+
+        # -----------------------------
+        # INSERT ITEMS
+        # -----------------------------
+        item_sql = """
+        INSERT INTO invoice_items
+        (invoice_item_id,invoice_type,invoice_number,hs_code,product_code,
+        product_description,rate,uom,quantity,value_of_sales_excluding_st,
+        sales_tax_applicable,retail_price_fixed_value,st_withheld_at_source,
+        extra_tax,further_tax,sro_schedule_no,fed_payable,
+        withholding_income_tax_applicable,wh_it_1,wh_it_2,
+        wh_it_section_1,wh_it_section_2,total_values,discount,cvt)
+
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+
+        for item in data["items"]:
+
+            cursor.execute(
+                item_sql,
+                (
+                    item["invoice_item_id"],
+                    item["invoice_type"],
+                    item["invoice_number"],
+                    item["hs_code"],
+                    item["product_code"],
+                    item["product_description"],
+                    item["rate"],
+                    item["uom"],
+                    item["quantity"],
+                    item["value_of_sales_excluding_st"],
+                    item["sales_tax_applicable"],
+                    item["retail_price_fixed_value"],
+                    item["st_withheld_at_source"],
+                    item["extra_tax"],
+                    item["further_tax"],
+                    item["sro_schedule_no"],
+                    item["fed_payable"],
+                    item["withholding_income_tax_applicable"],
+                    item["wh_it_1"],
+                    item["wh_it_2"],
+                    item["wh_it_section_1"],
+                    item["wh_it_section_2"],
+                    item["total_values"],
+                    item["discount"],
+                    item["cvt"]
+                )
+            )
+
+        conn.commit()
+
+        return jsonify({
+            "message": "Invoice inserted successfully",
+            "invoice_type": data["invoice_type"],
+            "invoice_number": data["invoice_number"]
+        })
+
+    except Exception as e:
+
+        conn.rollback()
+        return jsonify({"error": str(e)}), 400
+
+    finally:
+
+        cursor.close()
+        conn.close()
+
+
+# -----------------------------
+# API 2 : GET INVOICE
+# -----------------------------
+@app.route('/get_invoice/<int:invoice_type>/<int:invoice_number>', methods=['GET'])
+def get_invoice(invoice_type, invoice_number):
+
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    # invoice header
+    cursor.execute(
+        """
+        SELECT * FROM invoices
+        WHERE invoice_type=%s AND invoice_number=%s
+        """,
+        (invoice_type, invoice_number)
+    )
+
+    invoice = cursor.fetchone()
+
+    if not invoice:
+        return jsonify({"message": "Invoice not found"}), 404
+
+    # invoice items
+    cursor.execute(
+        """
+        SELECT *
+        FROM invoice_items
+        WHERE invoice_type=%s AND invoice_number=%s
+        """,
+        (invoice_type, invoice_number)
+    )
+
+    items = cursor.fetchall()
+
+    invoice["items"] = items
+
+    cursor.close()
+    conn.close()
+
+    return jsonify(invoice)
+
+
+# -----------------------------
+# RUN SERVER
+# -----------------------------
+if __name__ == '__main__':
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
